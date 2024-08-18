@@ -1,17 +1,20 @@
-use std::collections::{HashMap, HashSet};
+use indexmap::IndexMap;
+use std::collections::HashSet;
 use std::fs::File;
 
 use crate::commons::BedRecord;
 use crate::err::UmiVarCalError;
 
+use std::cmp;
+
 #[derive(Debug, Default, serde::Deserialize, serde::Serialize)]
 pub struct InsertionDict {
-    insertions: HashMap<String, NucleotideCounter>,
+    insertions: IndexMap<String, NucleotideCounter>,
 }
 
 #[derive(Debug, Default, serde::Deserialize, serde::Serialize)]
 pub struct DeletionDict {
-    deletions: HashMap<u32, NucleotideCounter>,
+    deletions: IndexMap<u32, NucleotideCounter>,
 }
 
 #[derive(Debug, Default, serde::Deserialize, serde::Serialize)]
@@ -35,7 +38,23 @@ pub struct PileupCounter {
 
 #[derive(Debug, Default, serde::Deserialize, serde::Serialize)]
 pub struct Pileup {
-    pileup: HashMap<String, HashMap<u32, PileupCounter>>,
+    pileup: IndexMap<String, IndexMap<u32, PileupCounter>>,
+}
+
+fn cmp_chromosome(chr1: &str, chr2: &str) -> cmp::Ordering {
+    let chr1: u32 = chr1
+        .chars()
+        .filter(|c| c.is_digit(10))
+        .collect::<String>()
+        .parse()
+        .unwrap_or(0);
+    let chr2: u32 = chr2
+        .chars()
+        .filter(|c| c.is_digit(10))
+        .collect::<String>()
+        .parse()
+        .unwrap_or(0);
+    chr1.cmp(&chr2)
 }
 
 impl Pileup {
@@ -48,7 +67,7 @@ impl Pileup {
         let file = File::create(format!("{}.{}.pileup", output_prefix, chrom)).unwrap();
         let mut wr = std::io::BufWriter::new(&file);
 
-        let mut obj = HashMap::new();
+        let mut obj = IndexMap::new();
         obj.insert(&chrom, pileup);
         rmp_serde::encode::write(&mut wr, &obj)?;
         Ok(())
@@ -63,9 +82,9 @@ impl Pileup {
         start: Option<u32>,
         end: Option<u32>,
     ) {
-        //Get pileup for the range, as a HashMap of chromosome => position => PileupCounter.
+        //Get pileup for the range, as a IndexMap of chromosome => position => PileupCounter.
 
-        let pileup_range: HashMap<u32, &PileupCounter> = self
+        let pileup_range: IndexMap<u32, &PileupCounter> = self
             .pileup
             .get(chrom)
             .map(|x| {
@@ -98,7 +117,7 @@ impl Pileup {
                 .expect("Could not get maximum position!"),
         );
 
-        let mut obj = HashMap::new();
+        let mut obj = IndexMap::new();
         obj.insert(chrom, &pileup_range);
 
         let file = File::create(format!(
@@ -135,7 +154,7 @@ impl Pileup {
             let file_name = format!("{}.{}.{}.{}.pileup", output_prefix, chrom, start, end);
             let file = File::create(&file_name).expect("Could not create pileup file!");
             let mut wr = std::io::BufWriter::new(&file);
-            let pileup_range: Option<HashMap<&u32, &PileupCounter>> =
+            let pileup_range: Option<IndexMap<&u32, &PileupCounter>> =
                 self.pileup.get(&chrom).map(|x| {
                     x.iter()
                         .filter(|(k, _)| k >= &&start && *k < &&end)
@@ -148,7 +167,7 @@ impl Pileup {
                     continue;
                 }
                 Some(pileup_range) => {
-                    let mut obj = HashMap::new();
+                    let mut obj = IndexMap::new();
                     obj.insert(&chrom, pileup_range);
                     rmp_serde::encode::write(&mut wr, &obj)?
                 }
@@ -160,7 +179,7 @@ impl Pileup {
     /// Create new, empty pileup from bed file.
     /// Prepares all the necessary data structures from the bed file.
     pub fn pileup_from_bed(bed: &std::path::Path) -> Self {
-        let mut pileup = HashMap::new();
+        let mut pileup = IndexMap::new();
         let mut reader = csv::ReaderBuilder::new()
             .delimiter(b'\t')
             .has_headers(false)
@@ -173,7 +192,7 @@ impl Pileup {
             let bed_record: BedRecord = record
                 .deserialize(None)
                 .expect("Could not deserialize record!");
-            let chrom_entry = pileup.entry(bed_record.chrom).or_insert(HashMap::new());
+            let chrom_entry = pileup.entry(bed_record.chrom).or_insert(IndexMap::new());
             for i in bed_record.start..=bed_record.end {
                 chrom_entry.insert(i, PileupCounter::default());
             }
@@ -186,13 +205,25 @@ impl Pileup {
     pub fn load_pileup(pileup: &std::path::Path) -> Self {
         let file = File::open(pileup).expect("Could not open pileup file!");
         let mut rd = std::io::BufReader::new(&file);
-        let pileup: HashMap<String, HashMap<u32, PileupCounter>> =
+        let pileup: IndexMap<String, IndexMap<u32, PileupCounter>> =
             rmp_serde::decode::from_read(&mut rd).expect("Could not decode pileup file!");
         Self { pileup }
     }
 
+    pub fn pileup(&mut self) -> &mut IndexMap<String, IndexMap<u32, PileupCounter>> {
+        &mut self.pileup
+    }
+
     pub fn len(&self) -> usize {
         self.pileup.len()
+    }
+
+    pub fn sort(&mut self) {
+        self.pileup
+            .par_sort_by(|k1, _v1, k2, _v2| cmp_chromosome(k1, k2));
+        for (_, pileup) in self.pileup.iter_mut() {
+            pileup.par_sort_keys();
+        }
     }
 
     pub fn add_read(

@@ -255,6 +255,8 @@ checksum = "93ead53efc7ea8ed3cfb0c79fc8023fbb782a5432b52830b6518941cebe6505c"
 dependencies = [
  "equivalent",
  "hashbrown",
+ "rayon",
+ "serde",
 ]
 
 [[package]]
@@ -355,6 +357,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a67f576cd91c3d6fbc0d47b6817abb511519276380005788d8f69852cbfd621"
 dependencies = [
  "noodles-bam",
+ "noodles-core",
  "noodles-fasta",
  "noodles-sam",
 ]
@@ -519,6 +522,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "csv",
+ "indexmap",
  "noodles",
  "rayon",
  "rmp-serde",

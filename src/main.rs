@@ -4,10 +4,6 @@ use rusty_umivarcal as lib;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli_options = cli::Command::parse();
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(cli_options.cores())
-        .build_global()
-        .unwrap();
     lib::call(
         cli_options.input(),
         cli_options.bed(),

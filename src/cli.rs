@@ -46,7 +46,7 @@ pub struct Command {
 
     /// Minimum mapping quality
     #[clap(long = "min_mapping_quality", default_value = "20")]
-    min_mapping_quality: u16,
+    min_mapping_quality: u8,
 
     /// Minimum variant UMI
     #[clap(long = "min_variant_umi", default_value = "5")]
@@ -142,7 +142,7 @@ impl Command {
         self.min_read_quality
     }
 
-    pub fn min_mapping_quality(&self) -> u16 {
+    pub fn min_mapping_quality(&self) -> u8 {
         self.min_mapping_quality
     }
 

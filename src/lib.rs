@@ -10,6 +10,9 @@ use commons::StrandBiasMethod;
 
 pub mod treat_reads;
 
+pub mod add_depth_noise;
+use add_depth_noise::add_depth_noise_ref_hp;
+
 pub mod pileup;
 use pileup::Pileup;
 
@@ -19,7 +22,7 @@ pub fn call(
     bed: &std::path::Path,
     fasta: &std::path::Path,
     min_base_quality: u16,
-    min_mapping_quality: u16,
+    min_mapping_quality: u8,
     min_read_quality: u16,
     min_variant_umi: u16,
     min_variant_depth: u16,
@@ -80,6 +83,10 @@ pub fn call(
             cores = 1;
         }
     }
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(cores)
+        .build_global()
+        .unwrap();
     if rebuild {
         valid_reads = treat_reads::treat_reads(
             &input,

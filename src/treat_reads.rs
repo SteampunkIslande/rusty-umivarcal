@@ -1,8 +1,13 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    ops::Deref,
+    sync::{Arc, Mutex},
+};
+
+use indexmap::IndexMap;
 
 use noodles::sam::alignment::Record;
 
-use crate::{err::UmiVarCalError, pileup::Pileup};
+use crate::{commons::read_is_valid, err::UmiVarCalError, pileup::Pileup};
 use noodles::bam;
 use rayon::iter::{ParallelBridge, ParallelIterator};
 
@@ -13,11 +18,9 @@ pub fn treat_reads(
     output: &std::path::Path,
     min_base_quality: u16,
     min_read_quality: u16,
-    min_mapping_quality: u16,
+    min_mapping_quality: u8,
 ) -> Result<usize, UmiVarCalError> {
-    let mut valid_reads = 0;
-
-    let mut current_line: u64 = 1;
+    let valid_reads = Arc::new(Mutex::new(0 as usize));
 
     let mut reader = bam::io::reader::Builder::default().build_from_path(bam_file)?;
 
@@ -25,9 +28,13 @@ pub fn treat_reads(
 
     let pileup = Arc::new(Mutex::new(pileup));
 
+    //Create a set with all UMIs (contained in a Arc of Mutex)
+    let all_umis: Arc<Mutex<IndexMap<String, u32>>> = Arc::new(Mutex::new(IndexMap::new()));
+
     //Read bam_file in parallel, and update pileup
-    reader.records().par_bridge().for_each(move |record| {
+    reader.records().par_bridge().for_each(|record| {
         let record = record.expect("Could not read record!");
+
         let strand = record.flags().is_reverse_complemented() as u8;
         let first_in_pair = record.flags().is_first_segment();
         let chromosome: String = record
@@ -41,22 +48,23 @@ pub fn treat_reads(
             .expect("Could not get alignment start!")
             .unwrap()
             .get();
-        let mapq: u16 = record
+        let mapq: u8 = record
             .mapping_quality()
             .expect("Could not get mapping quality!")
-            .get() as u16;
-        let cigar: &[u8] = &record.cigar().as_ref();
-        let sequence: &[u8] = record.sequence().as_ref();
-        let base_quals: &[u8] = record.quality_scores().as_ref();
+            .get();
+        let cigar = record.cigar();
+        let sequence = record.sequence();
+        let base_quals = record.quality_scores();
+        let flag = record.flags().bits();
 
         let mate_pos: usize = match record.mate_alignment_start() {
             Some(Ok(pos)) => pos.get() as usize,
             //Early return if mate is not mapped. TODO: Handle this case for single-end reads.
             _ => return,
         };
-        let umi = match record.data().get(b"RX") {
+        let mut umi = match record.data().get(b"RX") {
             Some(Ok(umi)) => format!("{:?}", umi),
-            // No UMI, early return. Maybe it should panic?
+            // No UMI, early return. Maybe it should panic? This read won't be used for variant calling.
             _ => return,
         };
         eprintln!("UMI: {}", umi);
@@ -68,13 +76,47 @@ pub fn treat_reads(
             mate_pos % 10000
         };
 
-        let ini_umi = format!("{}-{}", umi, umi_pos);
         let mut found = false;
 
         for i in umi_pos - 3..umi_pos + 3 {
             let test_umi = format!("{}-{}", umi, i);
+            if all_umis.lock().unwrap().contains_key(&test_umi) {
+                umi = test_umi;
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            umi = format!("{}-{}", umi, umi_pos);
+        }
+        all_umis
+            .lock()
+            .unwrap()
+            .entry(umi.clone())
+            .and_modify(|e| *e += 1)
+            .or_insert(1);
+        if read_is_valid(
+            flag,
+            mapq,
+            min_mapping_quality,
+            base_quals.as_ref(),
+            min_read_quality,
+        ) {
+            let mut pileup = pileup.lock().unwrap();
+            pileup.add_read(
+                &umi,
+                strand,
+                &chromosome,
+                position as u32,
+                cigar.as_ref(),
+                sequence.as_ref(),
+                base_quals.as_ref(),
+                min_base_quality,
+            );
+            *valid_reads.lock().unwrap() += 1;
         }
     });
+    let valid_reads = valid_reads.lock().unwrap().deref().clone();
 
     Ok(valid_reads)
 }
