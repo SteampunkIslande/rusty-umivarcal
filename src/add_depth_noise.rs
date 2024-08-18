@@ -3,6 +3,8 @@ use std::path::Path;
 
 use std::io::{BufReader, Read};
 
+use noodles::core::Region;
+
 use noodles::fasta;
 
 use crate::err::UmiVarCalError;
@@ -12,9 +14,11 @@ pub fn add_depth_noise_ref_hp(pileup: &mut Pileup, fasta: &Path) -> Result<(), U
 
     for (chromosome, infos) in pileup.pileup().iter_mut() {
         for (position, composition) in infos.iter_mut() {
-            let reference = reader
-                .index()
-                .query(format!("{}:{}", chromosome, position).parse().unwrap())?;
+            let reference = reader.index().query(
+                &format!("{}:{}-{}", chromosome, position, position + 1)
+                    .parse::<Region>()
+                    .unwrap(),
+            )?;
         }
     }
 
