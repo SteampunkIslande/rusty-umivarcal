@@ -9,4 +9,7 @@ pub enum UmiVarCalError {
 
     #[error(transparent)]
     Serde(#[from] rmp_serde::encode::Error),
+
+    #[error(transparent)]
+    Utf8Decode(#[from] std::string::FromUtf8Error),
 }

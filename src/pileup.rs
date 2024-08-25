@@ -1,4 +1,5 @@
 use indexmap::IndexMap;
+use noodles::bam::record::Cigar;
 use std::collections::HashSet;
 use std::fs::File;
 
@@ -27,6 +28,10 @@ pub struct NucleotideCounter {
 
 #[derive(Debug, Default, serde::Deserialize, serde::Serialize)]
 pub struct PileupCounter {
+    // Reference base at this position
+    reference: u8,
+
+    //Keep track of the number of each nucleotide at this position (plus strand), the set of UMIs, and the sum of the quality scores.
     a: NucleotideCounter,
     c: NucleotideCounter,
     g: NucleotideCounter,
@@ -34,6 +39,44 @@ pub struct PileupCounter {
     insertions: InsertionDict,
     deletions: DeletionDict,
     base_error_probability: f32,
+
+    // Homopolymer length around this position
+    hp: u16,
+}
+
+impl PileupCounter {
+    // pub fn add_nucleotide(&mut self, nuc: &u8, umi: &str, qscore: u16) {
+    //     match nuc {
+    //         b'A' => {
+    //             self.a.add_forward(umi, qscore);
+    //         }
+    //         b'C' => {
+    //             self.c.add_forward(umi, qscore);
+    //         }
+    //         b'G' => {
+    //             self.g.add_forward(umi, qscore);
+    //         }
+    //         b'T' => {
+    //             self.t.add_forward(umi, qscore);
+    //         }
+    //         _ => (),
+    //     }
+    // }
+    pub fn set_reference(&mut self, nuc: &u8) {
+        self.reference = *nuc;
+    }
+
+    pub fn set_homopolymer(&mut self, hp: u16) {
+        self.hp = hp;
+    }
+}
+
+impl NucleotideCounter {
+    // pub fn add_forward(&mut self, umi: &str, qscore: u16) {
+    //     self.forward += 1;
+    //     self.umis.insert(umi.to_string());
+    //     self.qscore = Some(qscore + self.qscore.unwrap_or(0));
+    // }
 }
 
 #[derive(Debug, Default, serde::Deserialize, serde::Serialize)]
