@@ -1,12 +1,19 @@
+use core::str;
 use indexmap::IndexMap;
-use noodles::bam::record::Cigar;
 use std::collections::HashSet;
 use std::fs::File;
 
 use crate::commons::BedRecord;
-use crate::err::UmiVarCalError;
+use crate::err::{PileupError, UmiVarCalError};
+
+use regex::Regex;
 
 use std::cmp;
+
+struct CIGAROperation {
+    length: u32,
+    operation: char,
+}
 
 #[derive(Debug, Default, serde::Deserialize, serde::Serialize)]
 pub struct InsertionDict {
@@ -23,7 +30,7 @@ pub struct NucleotideCounter {
     forward: u32,
     reverse: u32,
     umis: HashSet<String>,
-    qscore: Option<u16>,
+    qscore: Option<u8>,
 }
 
 #[derive(Debug, Default, serde::Deserialize, serde::Serialize)]
@@ -42,26 +49,47 @@ pub struct PileupCounter {
 
     // Homopolymer length around this position
     hp: u16,
+
+    // Number of reads at this position
+    depth: u32,
+
+    // Mean quality score at this position
+    qscore: f32,
+
+    // Standard deviation of quality scores at this position
+    qscore_stdev: f32,
 }
 
 impl PileupCounter {
-    // pub fn add_nucleotide(&mut self, nuc: &u8, umi: &str, qscore: u16) {
-    //     match nuc {
-    //         b'A' => {
-    //             self.a.add_forward(umi, qscore);
-    //         }
-    //         b'C' => {
-    //             self.c.add_forward(umi, qscore);
-    //         }
-    //         b'G' => {
-    //             self.g.add_forward(umi, qscore);
-    //         }
-    //         b'T' => {
-    //             self.t.add_forward(umi, qscore);
-    //         }
-    //         _ => (),
-    //     }
-    // }
+    pub fn add_nucleotide(&mut self, nuc: &u8, umi: &str, qscore: u8, strand: u8) {
+        match (nuc, strand) {
+            (b'A', 0) => {
+                self.a.add_forward(umi, qscore);
+            }
+            (b'C', 0) => {
+                self.c.add_forward(umi, qscore);
+            }
+            (b'G', 0) => {
+                self.g.add_forward(umi, qscore);
+            }
+            (b'T', 0) => {
+                self.t.add_forward(umi, qscore);
+            }
+            (b'A', 1) => {
+                self.a.add_reverse(umi, qscore);
+            }
+            (b'C', 1) => {
+                self.c.add_reverse(umi, qscore);
+            }
+            (b'G', 1) => {
+                self.g.add_reverse(umi, qscore);
+            }
+            (b'T', 1) => {
+                self.t.add_reverse(umi, qscore);
+            }
+            _ => (),
+        }
+    }
     pub fn set_reference(&mut self, nuc: &u8) {
         self.reference = *nuc;
     }
@@ -72,11 +100,16 @@ impl PileupCounter {
 }
 
 impl NucleotideCounter {
-    // pub fn add_forward(&mut self, umi: &str, qscore: u16) {
-    //     self.forward += 1;
-    //     self.umis.insert(umi.to_string());
-    //     self.qscore = Some(qscore + self.qscore.unwrap_or(0));
-    // }
+    pub fn add_forward(&mut self, umi: &str, qscore: u8) {
+        self.forward += 1;
+        self.umis.insert(umi.to_string());
+        self.qscore = Some(qscore + self.qscore.unwrap_or(0));
+    }
+    pub fn add_reverse(&mut self, umi: &str, qscore: u8) {
+        self.reverse += 1;
+        self.umis.insert(umi.to_string());
+        self.qscore = Some(qscore + self.qscore.unwrap_or(0));
+    }
 }
 
 #[derive(Debug, Default, serde::Deserialize, serde::Serialize)]
@@ -244,7 +277,7 @@ impl Pileup {
         Self { pileup }
     }
 
-    /// Load pileup from serialized RMP file.
+    /// Load pileup from serialized messagepack file.
     pub fn load_pileup(pileup: &std::path::Path) -> Self {
         let file = File::open(pileup).expect("Could not open pileup file!");
         let mut rd = std::io::BufReader::new(&file);
@@ -258,7 +291,7 @@ impl Pileup {
     }
 
     pub fn len(&self) -> usize {
-        self.pileup.len()
+        self.pileup.iter().map(|(_, v)| v.len()).sum()
     }
 
     pub fn sort(&mut self) {
@@ -269,16 +302,93 @@ impl Pileup {
         }
     }
 
+    fn add_matches(
+        &mut self,
+        umi: &str,
+        chromosome: &str,
+        start: u32,
+        sequence: &[u8],
+        strand: u8,
+        cursor_pos: u32,
+        cursor_seq: usize,
+        op_length: u32,
+        base_qualities: &[u8],
+        min_base_quality: u16,
+    ) -> Result<(u32, usize, u32), UmiVarCalError> {
+        for position in start + cursor_pos..start + cursor_pos + op_length {
+            let base = sequence[cursor_seq];
+            let base_quality = base_qualities[cursor_seq] - 33;
+            if base_quality as u16 >= min_base_quality {
+                //Access pileup[chromosome][position]
+                self.pileup
+                    .get_mut(chromosome)
+                    .ok_or(PileupError::ChromosomeNotFound(chromosome.to_string()))?
+                    .get_mut(&position)
+                    .ok_or(PileupError::PositionNotFound(position))?
+                    .add_nucleotide(&base, umi, base_quality, strand);
+            }
+        }
+        Ok((start + cursor_pos + op_length - 1, cursor_seq, cursor_pos))
+    }
+
     pub fn add_read(
         &mut self,
         umi: &str,
         strand: u8,
         chromosome: &str,
-        position: u32,
+        start: u32,
         cigar: &[u8],
         sequence: &[u8],
         base_qualities: &[u8],
         min_base_quality: u16,
-    ) {
+    ) -> Result<(), UmiVarCalError> {
+        let re = Regex::new(r"(\d+)([MSIDHN])").unwrap();
+        let mut operations = Vec::new();
+        for cap in
+            re.captures_iter(str::from_utf8(cigar).expect("Could not convert cigar to string"))
+        {
+            let length = cap[1].parse::<u32>().unwrap(); //Safe to unwrap because the regex guarantees that the capture is a number.
+            let operation = cap[2].chars().next().unwrap(); //Safe to unwrap because the regex guarantees that the capture is a single character.
+            operations.push(CIGAROperation { length, operation });
+        }
+        // Check if operations and sequence length match
+        if operations
+            .iter()
+            .map(|op| op.length as usize)
+            .sum::<usize>()
+            != sequence.len()
+        {
+            panic!("Invalid CIGAR string: CIGAR and sequence length do not match!");
+        }
+        //Remove N operations
+        operations.retain(|op| op.operation != 'N');
+
+        let mut cursor_pos = 0;
+        let mut cursor_seq = 0;
+        let mut position = start;
+
+        for (op_length, op_type) in operations.iter().map(|op| (op.length, op.operation)) {
+            match op_type {
+                'M' => {
+                    (position, cursor_seq, cursor_pos) = self.add_matches(
+                        umi,
+                        chromosome,
+                        start,
+                        sequence,
+                        strand,
+                        cursor_pos,
+                        cursor_seq,
+                        op_length,
+                        base_qualities,
+                        min_base_quality,
+                    )?;
+                }
+                'I' => todo!(),
+                'D' => todo!(),
+                'S' => todo!(),
+                _ => {}
+            }
+        }
+        Ok(())
     }
 }

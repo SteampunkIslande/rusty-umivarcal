@@ -1,9 +1,25 @@
-use rusty_umivarcal::commons;
+use rusty_umivarcal::commons::{self, UmiSource};
 
 #[derive(clap::ValueEnum, std::fmt::Debug, Clone)]
 pub enum StrandBiasMethod {
     Default,
     Torrent,
+}
+
+#[derive(clap::Parser, std::fmt::Debug)]
+#[group(multiple = false)]
+struct Umi {
+    /// Get UMI from the read name
+    #[clap(long = "umi-from-read-name")]
+    from_read_name: bool,
+
+    /// Get UMI from a BAM tag
+    #[clap(long = "umi-from-tag")]
+    tag: Option<String>,
+
+    /// Get UMI from the read sequence, with a fixed length
+    #[clap(long = "umi-from-length")]
+    from_length: Option<usize>,
 }
 
 #[derive(clap::Parser, std::fmt::Debug)]
@@ -103,6 +119,13 @@ pub struct Command {
     /// Maximum phase distance
     #[clap(long = "max_phase_distance", default_value = "100")]
     max_phase_distance: u16,
+
+    /// Where to get UMI barcodes from. Three optional mutually exclusive flags:
+    /// 1. `--umi-from-read-name` to get UMI from the read name.
+    /// 2. `--umi-from-tag` to get UMI from a BAM tag (accepts tag name, but defaults to `RX`).
+    /// 3. `--umi-from-length` to get UMI from the read sequence, with a fixed length.
+    #[command(flatten)]
+    umi: Umi,
 }
 
 impl Command {
@@ -213,5 +236,31 @@ impl Command {
 
     pub fn max_phase_distance(&self) -> u16 {
         self.max_phase_distance
+    }
+
+    pub fn umi_source(&self) -> UmiSource {
+        match &self.umi {
+            Umi {
+                from_read_name: true,
+                tag: None,
+                from_length: None,
+            } => UmiSource::ReadName,
+            Umi {
+                from_read_name: false,
+                tag: Some(tag),
+                from_length: None,
+            } => UmiSource::Tag(tag.clone()),
+            Umi {
+                from_read_name: false,
+                tag: None,
+                from_length: Some(length),
+            } => UmiSource::Length(*length),
+            Umi {
+                from_read_name: false,
+                tag: None,
+                from_length: None,
+            } => UmiSource::Tag("RX".to_string()),
+            _ => panic!("Arguments are mutually exclusive!"),
+        }
     }
 }

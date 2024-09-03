@@ -7,7 +7,11 @@ use indexmap::IndexMap;
 
 use noodles::sam::alignment::Record;
 
-use crate::{commons::read_is_valid, err::UmiVarCalError, pileup::Pileup};
+use crate::{
+    commons::{read_is_valid, UmiSource},
+    err::UmiVarCalError,
+    pileup::Pileup,
+};
 use noodles::bam;
 use rayon::iter::{ParallelBridge, ParallelIterator};
 
@@ -19,6 +23,7 @@ pub fn treat_reads(
     min_base_quality: u16,
     min_read_quality: u16,
     min_mapping_quality: u8,
+    umi_source: UmiSource,
 ) -> Result<usize, UmiVarCalError> {
     let valid_reads = Arc::new(Mutex::new(0 as usize));
 
@@ -62,10 +67,27 @@ pub fn treat_reads(
             //Early return if mate is not mapped. TODO: Handle this case for single-end reads.
             _ => return,
         };
-        let mut umi = match record.data().get(b"RX") {
-            Some(Ok(umi)) => format!("{:?}", umi),
-            // No UMI, early return. Maybe it should panic? This read won't be used for variant calling.
-            _ => return,
+        let mut umi = match &umi_source {
+            UmiSource::ReadName => {
+                let read_name = record.name().expect("Could not get read name!");
+                let umi = read_name.rsplitn(2, |s| *s == b'_').next().unwrap();
+                String::from_utf8(umi.to_vec()).unwrap()
+            }
+            UmiSource::Tag(tag) => {
+                match record.data().get::<[u8; 2]>(
+                    tag.as_bytes()[..2]
+                        .try_into()
+                        .expect(&format!("Cannot read tag {:?}!", tag)),
+                ) {
+                    Some(Ok(umi)) => format!("{:?}", umi),
+                    // No UMI, early return. Maybe it should panic? This read won't be used for variant calling.
+                    _ => return,
+                }
+            }
+            UmiSource::Length(len) => {
+                let umi = sequence.iter().take(*len).collect::<Vec<u8>>();
+                String::from_utf8(umi).unwrap()
+            }
         };
         eprintln!("UMI: {}", umi);
 
@@ -103,7 +125,7 @@ pub fn treat_reads(
             min_read_quality,
         ) {
             let mut pileup = pileup.lock().unwrap();
-            pileup.add_read(
+            if let Ok(()) = pileup.add_read(
                 &umi,
                 strand,
                 &chromosome,
@@ -112,8 +134,9 @@ pub fn treat_reads(
                 sequence.as_ref(),
                 base_quals.as_ref(),
                 min_base_quality,
-            );
-            *valid_reads.lock().unwrap() += 1;
+            ) {
+                *valid_reads.lock().unwrap() += 1;
+            }
         }
     });
     let valid_reads = valid_reads.lock().unwrap().deref().clone();

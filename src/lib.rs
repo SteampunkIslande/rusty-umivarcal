@@ -9,6 +9,7 @@ pub mod commons;
 use commons::StrandBiasMethod;
 
 pub mod treat_reads;
+use treat_reads::treat_reads;
 
 pub mod add_depth_noise;
 use add_depth_noise::add_depth_noise_ref_hp;
@@ -41,6 +42,7 @@ pub fn call(
     min_phase_vaf_ratio: f64,
     max_phase_distance: u16,
     compute_coverage_stats: bool,
+    umi_source: commons::UmiSource,
 ) -> Result<(), UmiVarCalError> {
     let mut cores = cores;
 
@@ -74,10 +76,10 @@ pub fn call(
 
     let pileup_len = pileup.len();
     if cores > 1 {
-        if (pileup_len > 1000000 && pileup_len <= 2000000 && read_count < 5000000)
-            || (pileup_len > 2000000 && pileup_len <= 5000000 && read_count < 20000000)
-            || (pileup_len > 5000000 && pileup_len <= 10000000 && read_count < 50000000)
-            || (pileup_len > 10000000)
+        if (pileup_len > 1_000_000 && pileup_len <= 2_000_000 && read_count < 5_000_000)
+            || (pileup_len > 2_000_000 && pileup_len <= 5_000_000 && read_count < 20_000_000)
+            || (pileup_len > 5_000_000 && pileup_len <= 10_000_000 && read_count < 50_000_000)
+            || (pileup_len > 10_000_000)
         {
             eprintln!("Warning: Using more cores to analyze the provided data will not result in any significant performance gains!\nLaunching UMI-VarCal on one core only...\n");
             cores = 1;
@@ -88,7 +90,7 @@ pub fn call(
         .build_global()
         .unwrap();
     if rebuild {
-        valid_reads = treat_reads::treat_reads(
+        valid_reads = treat_reads(
             &input,
             &mut pileup,
             read_count,
@@ -96,11 +98,14 @@ pub fn call(
             min_base_quality,
             min_read_quality,
             min_mapping_quality,
+            umi_source,
         )?;
         if keep_pileup {
             pileup.save_pileup_bed(output.join(sample_name).to_str().unwrap(), bed);
         }
+        add_depth_noise_ref_hp(&mut pileup, fasta)?;
     }
+    pileup;
 
     Ok(())
 }

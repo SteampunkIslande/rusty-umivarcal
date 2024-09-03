@@ -3,6 +3,12 @@ pub enum StrandBiasMethod {
     Torrent,
 }
 
+pub enum UmiSource {
+    ReadName,
+    Tag(String),
+    Length(usize),
+}
+
 #[derive(Debug, Default, serde::Deserialize, serde::Serialize)]
 pub struct BedRecord {
     pub chrom: String,
