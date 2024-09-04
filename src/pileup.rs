@@ -293,50 +293,46 @@ impl Pileup {
     ) {
         //Get pileup for the range, as a IndexMap of chromosome => position => PileupCounter.
 
-        let pileup_range: IndexMap<u32, &PileupCounter> = self
-            .pileup
-            .get(chrom)
-            .map(|x| {
-                x.iter()
-                    .filter(|(k, _)| match (start, end) {
-                        (Some(start), Some(end)) => k >= &&start && k < &&end,
-                        (Some(_), None) => {
-                            todo!("End position not provided! Either provide both or none!")
-                        }
-                        (None, Some(_)) => {
-                            todo!("Starts position not provided! Either provide both or none!")
-                        }
-                        (None, None) => true,
-                    })
-                    .map(|(k, v)| (*k, v))
-                    .collect()
-            })
+        if let Some(pileup_range) = self.pileup.get(chrom).map(|x| {
+            x.iter()
+                .filter(|(k, _)| match (start, end) {
+                    (Some(start), Some(end)) => k >= &&start && k < &&end,
+                    (Some(_), None) => {
+                        todo!("End position not provided! Either provide both or none!")
+                    }
+                    (None, Some(_)) => {
+                        todo!("Starts position not provided! Either provide both or none!")
+                    }
+                    (None, None) => true,
+                })
+                .map(|(k, v)| (*k, v))
+                .collect::<IndexMap<u32, &PileupCounter>>()
+        }) {
+            let start = start.unwrap_or(
+                *pileup_range
+                    .keys()
+                    .min()
+                    .expect("Could not get minimum position!"),
+            );
+            let end = end.unwrap_or(
+                *pileup_range
+                    .keys()
+                    .max()
+                    .expect("Could not get maximum position!"),
+            );
+
+            let mut obj = IndexMap::new();
+            obj.insert(chrom, &pileup_range);
+
+            let file = File::create(format!(
+                "{}.{}.{}.{}.pileup",
+                output_prefix, chrom, start, end
+            ))
             .unwrap();
 
-        let start = start.unwrap_or(
-            *pileup_range
-                .keys()
-                .min()
-                .expect("Could not get minimum position!"),
-        );
-        let end = end.unwrap_or(
-            *pileup_range
-                .keys()
-                .max()
-                .expect("Could not get maximum position!"),
-        );
-
-        let mut obj = IndexMap::new();
-        obj.insert(chrom, &pileup_range);
-
-        let file = File::create(format!(
-            "{}.{}.{}.{}.pileup",
-            output_prefix, chrom, start, end
-        ))
-        .unwrap();
-
-        let mut wr = std::io::BufWriter::new(&file);
-        rmp_serde::encode::write(&mut wr, &pileup_range).unwrap();
+            let mut wr = std::io::BufWriter::new(&file);
+            rmp_serde::encode::write(&mut wr, &pileup_range).unwrap();
+        }
     }
 
     /// Save pileup for a range of positions in a bed file.
@@ -360,27 +356,14 @@ impl Pileup {
             let chrom = bed_record.chrom;
             let start = bed_record.start;
             let end = bed_record.end;
-            let file_name = format!("{}.{}.{}.{}.pileup", output_prefix, chrom, start, end);
-            let file = File::create(&file_name).expect("Could not create pileup file!");
-            let mut wr = std::io::BufWriter::new(&file);
-            let pileup_range: Option<IndexMap<&u32, &PileupCounter>> =
-                self.pileup.get(&chrom).map(|x| {
-                    x.iter()
-                        .filter(|(k, _)| k >= &&start && *k < &&end)
-                        .collect()
-                });
-            if let Some(pileup_range) = pileup_range {
-                let mut obj = IndexMap::new();
-                obj.insert(&chrom, pileup_range);
-                rmp_serde::encode::write(&mut wr, &obj)?
-            }
+            self.save_pileup_range(output_prefix, &chrom, Some(start), Some(end));
         }
         Ok(())
     }
 
     /// Create new, empty pileup from bed file.
     /// Prepares all the necessary data structures from the bed file.
-    pub fn pileup_from_bed(bed: &std::path::Path) -> Self {
+    pub fn new_pileup_from_bed(bed: &std::path::Path) -> Self {
         let mut pileup = IndexMap::new();
         let mut reader = csv::ReaderBuilder::new()
             .delimiter(b'\t')
@@ -412,8 +395,12 @@ impl Pileup {
         Self { pileup }
     }
 
-    pub fn pileup(&mut self) -> &mut IndexMap<String, IndexMap<u32, PileupCounter>> {
+    pub fn pileup_mut(&mut self) -> &mut IndexMap<String, IndexMap<u32, PileupCounter>> {
         &mut self.pileup
+    }
+
+    pub fn pileup(&self) -> &IndexMap<String, IndexMap<u32, PileupCounter>> {
+        &self.pileup
     }
 
     pub fn len(&self) -> usize {
@@ -560,9 +547,7 @@ impl Pileup {
     ) -> Result<(), UmiVarCalError> {
         let re = Regex::new(r"(\d+)([MSIDHN])").unwrap();
         let mut operations = Vec::new();
-        for cap in
-            re.captures_iter(str::from_utf8(cigar).expect("Could not convert cigar to string"))
-        {
+        for cap in re.captures_iter(str::from_utf8(cigar).unwrap_or("".into()).as_ref()) {
             let length = cap[1].parse::<u32>().unwrap(); //Safe to unwrap because the regex guarantees that the capture is a number.
             let operation = cap[2].chars().next().unwrap(); //Safe to unwrap because the regex guarantees that the capture is a single character.
             operations.push(CIGAROperation { length, operation });

@@ -35,12 +35,21 @@ pub fn read_is_valid(
 ) -> bool {
     let orphan = flag & 0x2 == 0x0;
     if orphan {
+        eprintln!("Orphan read found!");
         return false;
     }
     if !qual_is_valid(read_base_qualities, min_read_quality) {
+        eprintln!(
+            "Read quality is below threshold! {:?} < {:?}",
+            read_base_qualities, min_read_quality
+        );
         return false;
     }
     if mapq < min_mapping_quality || mapq == 255 {
+        eprintln!(
+            "Mapping quality is below threshold! {:?} < {:?}",
+            mapq, min_mapping_quality
+        );
         return false;
     }
     true

@@ -23,4 +23,13 @@ pub enum UmiVarCalError {
 
     #[error(transparent)]
     PileupError(#[from] PileupError),
+
+    #[error("No reference sequence found")]
+    NoReferenceSequence,
+
+    #[error("Single-end reads are not supported")]
+    SingleEndReadsNotSupported,
+
+    #[error("No UMI found for read name {0}")]
+    NoUmi(String),
 }

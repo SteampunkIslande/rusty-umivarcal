@@ -37,12 +37,12 @@ pub fn add_depth_noise_ref_hp(pileup: &mut Pileup, fasta: &Path) -> Result<(), U
     let mut reader = fasta::io::indexed_reader::Builder::default().build_from_path(fasta)?;
 
     let total_lines: usize = pileup
-        .pileup()
+        .pileup_mut()
         .iter()
         .map(|(_chromosome, infos)| infos.len())
         .sum();
 
-    for (chromosome, infos) in pileup.pileup().iter_mut() {
+    for (chromosome, infos) in pileup.pileup_mut().iter_mut() {
         for (position, composition) in infos.iter_mut() {
             // Add reference base to pileup composition
             let reference_base =

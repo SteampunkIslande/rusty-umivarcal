@@ -5,7 +5,7 @@ use std::{
 
 use indexmap::IndexMap;
 
-use noodles::sam::alignment::Record;
+use noodles::{bam::record, sam::alignment::Record};
 
 use crate::{
     commons::{read_is_valid, UmiSource},
@@ -13,7 +13,6 @@ use crate::{
     pileup::Pileup,
 };
 use noodles::bam;
-use rayon::iter::{ParallelBridge, ParallelIterator};
 
 pub fn treat_reads(
     bam_file: &std::path::Path,
@@ -25,47 +24,48 @@ pub fn treat_reads(
     min_mapping_quality: u8,
     umi_source: UmiSource,
 ) -> Result<usize, UmiVarCalError> {
-    let valid_reads = Arc::new(Mutex::new(0 as usize));
+    let mut valid_reads = 0;
 
     let mut reader = bam::io::reader::Builder::default().build_from_path(bam_file)?;
 
     let header = reader.read_header()?;
 
-    let pileup = Arc::new(Mutex::new(pileup));
-
     //Create a set with all UMIs (contained in a Arc of Mutex)
-    let all_umis: Arc<Mutex<IndexMap<String, u32>>> = Arc::new(Mutex::new(IndexMap::new()));
+    let mut all_umis: IndexMap<String, u32> = IndexMap::new();
 
     //Read bam_file in parallel, and update pileup
-    reader.records().par_bridge().for_each(|record| {
+    for record in reader.records() {
         let record = record.expect("Could not read record!");
 
         let strand = record.flags().is_reverse_complemented() as u8;
         let first_in_pair = record.flags().is_first_segment();
-        let chromosome: String = record
+        let chromosome: Option<String> = record
             .reference_sequence(&header)
             .transpose()
-            .expect("Could not get reference sequence!")
-            .map(|(name, _)| name.to_string())
-            .unwrap();
-        let position: usize = record
+            .ok()
+            .flatten()
+            .map(|(name, _)| name.to_string());
+        let position: Option<usize> = record
             .alignment_start()
-            .expect("Could not get alignment start!")
-            .unwrap()
-            .get();
-        let mapq: u8 = record
-            .mapping_quality()
-            .expect("Could not get mapping quality!")
-            .get();
+            .transpose()
+            .ok()
+            .flatten()
+            .map(|pos| pos.get());
+        let mapq = record.mapping_quality().map(|q| q.get()).unwrap_or(0);
         let cigar = record.cigar();
         let sequence = record.sequence();
         let base_quals = record.quality_scores();
         let flag = record.flags().bits();
+        let position = position.unwrap();
+        let chromosome = chromosome.unwrap();
 
         let mate_pos: usize = match record.mate_alignment_start() {
             Some(Ok(pos)) => pos.get() as usize,
             //Early return if mate is not mapped. TODO: Handle this case for single-end reads.
-            _ => return,
+            _ => {
+                eprintln!("TODO: Handle single-end reads!");
+                return Err(UmiVarCalError::SingleEndReadsNotSupported);
+            }
         };
         let mut umi = match &umi_source {
             UmiSource::ReadName => {
@@ -81,7 +81,13 @@ pub fn treat_reads(
                 ) {
                     Some(Ok(umi)) => format!("{:?}", umi),
                     // No UMI, early return. Maybe it should panic? This read won't be used for variant calling.
-                    _ => return,
+                    _ => {
+                        return Err(UmiVarCalError::NoUmi(
+                            record
+                                .name()
+                                .map_or("Unnamed".to_string(), |n| n.to_string()),
+                        ))
+                    }
                 }
             }
             UmiSource::Length(len) => {
@@ -102,7 +108,7 @@ pub fn treat_reads(
 
         for i in umi_pos - 3..umi_pos + 3 {
             let test_umi = format!("{}-{}", umi, i);
-            if all_umis.lock().unwrap().contains_key(&test_umi) {
+            if all_umis.contains_key(&test_umi) {
                 umi = test_umi;
                 found = true;
                 break;
@@ -112,8 +118,6 @@ pub fn treat_reads(
             umi = format!("{}-{}", umi, umi_pos);
         }
         all_umis
-            .lock()
-            .unwrap()
             .entry(umi.clone())
             .and_modify(|e| *e += 1)
             .or_insert(1);
@@ -124,7 +128,7 @@ pub fn treat_reads(
             base_quals.as_ref(),
             min_read_quality,
         ) {
-            let mut pileup = pileup.lock().unwrap();
+            eprintln!("{}", record.name().unwrap());
             if let Ok(()) = pileup.add_read(
                 &umi,
                 strand,
@@ -135,11 +139,12 @@ pub fn treat_reads(
                 base_quals.as_ref(),
                 min_base_quality,
             ) {
-                *valid_reads.lock().unwrap() += 1;
+                valid_reads += 1;
             }
+        } else {
+            eprintln!("Read is not valid!");
         }
-    });
-    let valid_reads = valid_reads.lock().unwrap().deref().clone();
+    }
 
     Ok(valid_reads)
 }

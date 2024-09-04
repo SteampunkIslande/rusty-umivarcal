@@ -1,8 +1,8 @@
 use err::UmiVarCalError;
 use noodles::{bam, fasta};
+use std::env;
 use std::fs::File;
 use std::io::BufReader;
-
 pub mod err;
 
 pub mod commons;
@@ -70,7 +70,7 @@ pub fn call(
     let rebuild = pileup.is_none();
 
     let mut pileup = match pileup {
-        None => Pileup::pileup_from_bed(bed),
+        None => Pileup::new_pileup_from_bed(bed),
         Some(pileup) => Pileup::load_pileup(pileup),
     };
 
@@ -100,9 +100,21 @@ pub fn call(
             min_mapping_quality,
             umi_source,
         )?;
+        eprintln!("{} valid reads found!", valid_reads);
         add_depth_noise_ref_hp(&mut pileup, fasta)?;
         if keep_pileup {
-            pileup.save_pileup_bed(output.join(sample_name).to_str().unwrap(), bed);
+            let pileup = &pileup;
+            for chrom in pileup.pileup().keys() {
+                pileup.save_pileup_chromosome(
+                    output
+                        .parent()
+                        .unwrap_or(&env::current_dir().expect("Could not get current directory!"))
+                        .join(sample_name)
+                        .to_str()
+                        .unwrap(),
+                    &chrom,
+                );
+            }
         }
     }
     pileup;
