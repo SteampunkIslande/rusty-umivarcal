@@ -93,6 +93,9 @@ impl PileupCounter {
     pub fn add_insertion(&mut self, seq: &str, umi: &str, qscore: u8, strand: u8) {
         self.insertions.insert(seq, umi, qscore, strand);
     }
+    pub fn add_deletion(&mut self, position: u32, umi: &str, strand: u8) {
+        self.deletions.add_deletion(position, umi, strand);
+    }
     pub fn set_reference(&mut self, nuc: &u8) {
         self.reference = *nuc;
     }
@@ -128,6 +131,24 @@ impl InsertionDict {
                 .entry(nuc.to_string())
                 .or_insert(NucleotideCounter::default())
                 .add_reverse(umi, qscore),
+            _ => (),
+        }
+    }
+}
+
+impl DeletionDict {
+    pub fn add_deletion(&mut self, position: u32, umi: &str, strand: u8) {
+        match strand {
+            0 => self
+                .deletions
+                .entry(position)
+                .or_insert(NucleotideCounter::default())
+                .add_forward(umi, 0),
+            1 => self
+                .deletions
+                .entry(position)
+                .or_insert(NucleotideCounter::default())
+                .add_reverse(umi, 0),
             _ => (),
         }
     }
@@ -409,6 +430,39 @@ impl Pileup {
         Ok((position, cursor_seq, cursor_pos))
     }
 
+    fn add_deletions(
+        &mut self,
+        umi: &str,
+        chromosome: &str,
+        start: u32,
+        strand: u8,
+        cursor_pos: u32,
+        cursor_seq: usize,
+        op_length: u32,
+    ) -> Result<(u32, usize, u32), UmiVarCalError> {
+        let mut del_cursor = 0;
+        let mut cursor_pos = cursor_pos;
+        for position in start + cursor_pos..start + cursor_pos + op_length {
+            if self
+                .pileup
+                .get(chromosome)
+                .map(|x| x.get(&position))
+                .flatten()
+                .is_some()
+            {
+                self.pileup
+                    .get_mut(chromosome)
+                    .ok_or(PileupError::ChromosomeNotFound(chromosome.to_string()))?
+                    .get_mut(&position)
+                    .ok_or(PileupError::PositionNotFound(position))?
+                    .add_deletion(op_length - del_cursor, umi, strand);
+                del_cursor += 1;
+            }
+        }
+        cursor_pos += op_length;
+        Ok((start + cursor_pos + op_length - 1, cursor_seq, cursor_pos))
+    }
+
     pub fn add_read(
         &mut self,
         umi: &str,
@@ -476,7 +530,11 @@ impl Pileup {
                         min_base_quality,
                     )?;
                 }
-                'D' => todo!(),
+                'D' => {
+                    (position, cursor_seq, cursor_pos) = self.add_deletions(
+                        umi, chromosome, start, strand, cursor_pos, cursor_seq, op_length,
+                    )?;
+                }
                 'S' => todo!(),
                 _ => {}
             }
