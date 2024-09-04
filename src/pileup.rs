@@ -90,6 +90,9 @@ impl PileupCounter {
             _ => (),
         }
     }
+    pub fn add_insertion(&mut self, seq: &str, umi: &str, qscore: u8, strand: u8) {
+        self.insertions.insert(seq, umi, qscore, strand);
+    }
     pub fn set_reference(&mut self, nuc: &u8) {
         self.reference = *nuc;
     }
@@ -109,6 +112,24 @@ impl NucleotideCounter {
         self.reverse += 1;
         self.umis.insert(umi.to_string());
         self.qscore = Some(qscore + self.qscore.unwrap_or(0));
+    }
+}
+
+impl InsertionDict {
+    pub fn insert(&mut self, nuc: &str, umi: &str, qscore: u8, strand: u8) {
+        match strand {
+            0 => self
+                .insertions
+                .entry(nuc.to_string())
+                .or_insert(NucleotideCounter::default())
+                .add_forward(umi, qscore),
+            1 => self
+                .insertions
+                .entry(nuc.to_string())
+                .or_insert(NucleotideCounter::default())
+                .add_reverse(umi, qscore),
+            _ => (),
+        }
     }
 }
 
@@ -331,6 +352,63 @@ impl Pileup {
         Ok((start + cursor_pos + op_length - 1, cursor_seq, cursor_pos))
     }
 
+    fn add_insertions(
+        &mut self,
+        umi: &str,
+        chromosome: &str,
+        position: u32,
+        sequence: &[u8],
+        strand: u8,
+        cursor_pos: u32,
+        cursor_seq: usize,
+        op_length: u32,
+        base_qualities: &[u8],
+        min_base_quality: u16,
+    ) -> Result<(u32, usize, u32), UmiVarCalError> {
+        //Check if chromosome and position+1 exist in pileup
+        let mut cursor_pos = cursor_pos;
+        let mut cursor_seq = cursor_seq;
+        if self
+            .pileup
+            .get(chromosome)
+            .map(|x| x.get(&(position + 1)))
+            .flatten()
+            .is_some()
+        {
+            let mut inserted_sequence: Vec<u8> = Vec::new();
+            let mut inserted_qscore = 0f32;
+
+            for _ in 0..op_length {
+                let base = sequence[cursor_seq];
+                let base_quality = base_qualities[cursor_seq] - 33;
+                inserted_sequence.push(base);
+                inserted_qscore += base_quality as f32;
+
+                cursor_seq += 1;
+            }
+            inserted_qscore /= op_length as f32;
+
+            if inserted_qscore as u16 >= min_base_quality {
+                self.pileup
+                    .get_mut(chromosome)
+                    .ok_or(PileupError::ChromosomeNotFound(chromosome.to_string()))?
+                    .get_mut(&(position + 1))
+                    .ok_or(PileupError::PositionNotFound(position + 1))?
+                    .add_insertion(
+                        &String::from_utf8(inserted_sequence)?,
+                        umi,
+                        inserted_qscore as u8,
+                        strand,
+                    );
+                cursor_pos += 1;
+                cursor_seq += 1;
+            }
+        } else {
+            cursor_seq += op_length as usize;
+        }
+        Ok((position, cursor_seq, cursor_pos))
+    }
+
     pub fn add_read(
         &mut self,
         umi: &str,
@@ -366,6 +444,7 @@ impl Pileup {
         let mut cursor_pos = 0;
         let mut cursor_seq = 0;
         let mut position = start;
+        let mut start = start;
 
         for (op_length, op_type) in operations.iter().map(|op| (op.length, op.operation)) {
             match op_type {
@@ -383,7 +462,20 @@ impl Pileup {
                         min_base_quality,
                     )?;
                 }
-                'I' => todo!(),
+                'I' => {
+                    (position, cursor_seq, cursor_pos) = self.add_insertions(
+                        umi,
+                        chromosome,
+                        position,
+                        sequence,
+                        strand,
+                        cursor_pos,
+                        cursor_seq,
+                        op_length,
+                        base_qualities,
+                        min_base_quality,
+                    )?;
+                }
                 'D' => todo!(),
                 'S' => todo!(),
                 _ => {}
