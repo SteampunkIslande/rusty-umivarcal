@@ -18,6 +18,9 @@ struct CIGAROperation {
 #[derive(Debug, Default, serde::Deserialize, serde::Serialize)]
 pub struct InsertionDict {
     insertions: IndexMap<String, NucleotideCounter>,
+
+    mean_qscore: Option<f32>,
+    qscore_stdev: Option<f32>,
 }
 
 #[derive(Debug, Default, serde::Deserialize, serde::Serialize)]
@@ -53,11 +56,17 @@ pub struct PileupCounter {
     // Number of reads at this position
     depth: u32,
 
-    // Mean quality score at this position
-    qscore: f32,
+    // Quality scores at this position: do not serialize
+    #[serde(skip)]
+    qscore: Vec<f32>,
 
-    // Standard deviation of quality scores at this position
-    qscore_stdev: f32,
+    // Mean quality score at this position.
+    // If None, this means that the quality scores have not been computed yet.
+    mean_qscore: Option<f32>,
+
+    // Standard deviation of quality scores at this position.
+    // If None, this means that the quality scores have not been computed yet.
+    qscore_stdev: Option<f32>,
 }
 
 impl PileupCounter {
@@ -87,21 +96,103 @@ impl PileupCounter {
             (b'T', 1) => {
                 self.t.add_reverse(umi, qscore);
             }
-            _ => (),
+            _ => todo!("Foud {} in pileup!", *nuc as char),
         }
+        self.qscore.push(qscore as f32);
     }
+
     pub fn add_insertion(&mut self, seq: &str, umi: &str, qscore: u8, strand: u8) {
         self.insertions.insert(seq, umi, qscore, strand);
     }
+
     pub fn add_deletion(&mut self, position: u32, umi: &str, strand: u8) {
         self.deletions.add_deletion(position, umi, strand);
     }
+
     pub fn set_reference(&mut self, nuc: &u8) {
         self.reference = *nuc;
     }
 
     pub fn set_homopolymer(&mut self, hp: u16) {
         self.hp = hp;
+    }
+
+    pub fn compute_depth(&mut self) {
+        self.depth = 0
+            + self.get_a_depth()
+            + self.get_c_depth()
+            + self.get_g_depth()
+            + self.get_t_depth()
+            + self.get_deletions_count()
+            + self.get_insertions_count();
+    }
+
+    pub fn compute_mean_base_qscore(&mut self) {
+        let mut qscore = 0f32;
+        let mut n = 0;
+        if self.a.qscore.is_some() {
+            qscore += self.a.qscore.unwrap() as f32;
+            n += self.a.forward + self.a.reverse;
+        }
+        if self.c.qscore.is_some() {
+            qscore += self.c.qscore.unwrap() as f32;
+            n += self.c.forward + self.c.reverse;
+        }
+        if self.g.qscore.is_some() {
+            qscore += self.g.qscore.unwrap() as f32;
+            n += self.g.forward + self.g.reverse;
+        }
+        if self.t.qscore.is_some() {
+            qscore += self.t.qscore.unwrap() as f32;
+            n += self.t.forward + self.t.reverse;
+        }
+        if n > 0 {
+            self.mean_qscore = Some(qscore / n as f32);
+        } else {
+            self.mean_qscore = None;
+        }
+    }
+
+    pub fn compute_mean_qscore(&mut self) {
+        self.mean_qscore = Some(self.qscore.iter().sum::<f32>() / self.qscore.len() as f32);
+        self.qscore_stdev = Some(
+            ((self
+                .qscore
+                .iter()
+                .map(|x| (x - self.mean_qscore.unwrap()).powi(2))
+                .sum::<f32>()
+                / self.qscore.len() as f32)
+                .sqrt()
+                * 1e6)
+                .round()
+                / 1e6,
+        );
+        self.base_error_probability =
+            (10f32.powf(-self.mean_qscore.unwrap().floor() / 10f32) * 1e6).round() / 1e6;
+    }
+
+    fn get_a_depth(&self) -> u32 {
+        self.a.forward + self.a.reverse
+    }
+
+    fn get_c_depth(&self) -> u32 {
+        self.c.forward + self.c.reverse
+    }
+
+    fn get_g_depth(&self) -> u32 {
+        self.g.forward + self.g.reverse
+    }
+
+    fn get_t_depth(&self) -> u32 {
+        self.t.forward + self.t.reverse
+    }
+
+    fn get_insertions_count(&self) -> u32 {
+        self.insertions.insertions.len() as u32
+    }
+
+    fn get_deletions_count(&self) -> u32 {
+        self.deletions.deletions.len() as u32
     }
 }
 
@@ -278,17 +369,10 @@ impl Pileup {
                         .filter(|(k, _)| k >= &&start && *k < &&end)
                         .collect()
                 });
-            match pileup_range {
-                None => {
-                    //remove file
-                    std::fs::remove_file(&file_name).expect("Could not remove pileup file!");
-                    continue;
-                }
-                Some(pileup_range) => {
-                    let mut obj = IndexMap::new();
-                    obj.insert(&chrom, pileup_range);
-                    rmp_serde::encode::write(&mut wr, &obj)?
-                }
+            if let Some(pileup_range) = pileup_range {
+                let mut obj = IndexMap::new();
+                obj.insert(&chrom, pileup_range);
+                rmp_serde::encode::write(&mut wr, &obj)?
             }
         }
         Ok(())
@@ -535,7 +619,13 @@ impl Pileup {
                         umi, chromosome, start, strand, cursor_pos, cursor_seq, op_length,
                     )?;
                 }
-                'S' => todo!(),
+                'S' => {
+                    if cursor_pos == 0 {
+                        start -= op_length;
+                        cursor_pos += op_length;
+                        cursor_seq += op_length as usize;
+                    }
+                }
                 _ => {}
             }
         }

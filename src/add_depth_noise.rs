@@ -24,7 +24,7 @@ where
             .parse::<Region>()
             .unwrap(),
     )?;
-    let mut sequence: Vec<u8> = Vec::new();
+    let mut sequence: Vec<u8> = vec![0; length];
     reader
         .get_mut()
         .seek(std::io::SeekFrom::Start(query_start))?;
@@ -71,7 +71,11 @@ pub fn add_depth_noise_ref_hp(pileup: &mut Pileup, fasta: &Path) -> Result<(), U
                 .count();
             composition.set_homopolymer(hp as u16);
 
-            // Add depth: Already done by Pileup::add_read
+            composition.compute_depth();
+
+            composition.compute_mean_qscore();
+
+            composition.compute_mean_base_qscore();
         }
     }
 

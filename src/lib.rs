@@ -100,10 +100,10 @@ pub fn call(
             min_mapping_quality,
             umi_source,
         )?;
+        add_depth_noise_ref_hp(&mut pileup, fasta)?;
         if keep_pileup {
             pileup.save_pileup_bed(output.join(sample_name).to_str().unwrap(), bed);
         }
-        add_depth_noise_ref_hp(&mut pileup, fasta)?;
     }
     pileup;
 
