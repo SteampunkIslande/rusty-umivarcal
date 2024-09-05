@@ -93,7 +93,7 @@ pub struct Command {
     gvcf: bool,
 
     /// Whether to keep pileup
-    #[clap(long = "keep_pileup")]
+    #[clap(short = 'k', long = "keep_pileup")]
     keep_pileup: bool,
 
     /// Whether to compute coverage stats
@@ -119,6 +119,10 @@ pub struct Command {
     /// Maximum phase distance
     #[clap(long = "max_phase_distance", default_value = "100")]
     max_phase_distance: u16,
+
+    /// Whether to save messagepack objects with or without names. Please use for debugging purposes only (increases file size a lot).
+    #[clap(long = "msgpack-with-names")]
+    msgpack_with_names: bool,
 
     /// Where to get UMI barcodes from. Three optional mutually exclusive flags:
     /// 1. `--umi-from-read-name` to get UMI from the read name.
@@ -236,6 +240,10 @@ impl Command {
 
     pub fn max_phase_distance(&self) -> u16 {
         self.max_phase_distance
+    }
+
+    pub fn msgpack_with_names(&self) -> bool {
+        self.msgpack_with_names
     }
 
     pub fn umi_source(&self) -> UmiSource {

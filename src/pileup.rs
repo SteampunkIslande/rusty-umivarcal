@@ -1,19 +1,14 @@
 use core::str;
 use indexmap::IndexMap;
+use noodles::bam::record::{self, Sequence};
+use noodles::sam::alignment::record::cigar;
 use std::collections::HashSet;
 use std::fs::File;
 
 use crate::commons::BedRecord;
 use crate::err::{PileupError, UmiVarCalError};
 
-use regex::Regex;
-
 use std::cmp;
-
-struct CIGAROperation {
-    length: u32,
-    operation: char,
-}
 
 #[derive(Debug, Default, serde::Deserialize, serde::Serialize)]
 pub struct InsertionDict {
@@ -96,7 +91,7 @@ impl PileupCounter {
             (b'T', 1) => {
                 self.t.add_reverse(umi, qscore);
             }
-            _ => todo!("Foud {} in pileup!", *nuc as char),
+            _ => todo!("Found {:?} in pileup!", *nuc),
         }
         self.qscore.push(qscore as f32);
     }
@@ -267,96 +262,29 @@ fn cmp_chromosome(chr1: &str, chr2: &str) -> cmp::Ordering {
 }
 
 impl Pileup {
-    pub fn save_pileup_chromosome(
+    pub fn save_pileup(
         &self,
         output_prefix: &str,
-        chrom: &str,
+        chrom: Option<&str>,
+        msgpack_save_with_names: bool,
     ) -> Result<(), UmiVarCalError> {
-        let pileup = self.pileup.get(chrom).unwrap();
-        let file = File::create(format!("{}.{}.pileup", output_prefix, chrom)).unwrap();
+        let file = File::create(match chrom {
+            Some(chrom) => format!("{}.{}.pileup", output_prefix, chrom),
+            None => format!("{}.pileup", output_prefix),
+        })
+        .unwrap();
         let mut wr = std::io::BufWriter::new(&file);
 
         let mut obj = IndexMap::new();
-        obj.insert(&chrom, pileup);
-        rmp_serde::encode::write(&mut wr, &obj)?;
-        Ok(())
-    }
-
-    /// Save pileup for a range of positions in a chromosome. If no start and end are provided, the entire chromosome is saved.
-    /// The output file is named as follows: `output_prefix.chrom.start.end.pileup`.
-    pub fn save_pileup_range(
-        &self,
-        output_prefix: &str,
-        chrom: &str,
-        start: Option<u32>,
-        end: Option<u32>,
-    ) {
-        //Get pileup for the range, as a IndexMap of chromosome => position => PileupCounter.
-
-        if let Some(pileup_range) = self.pileup.get(chrom).map(|x| {
-            x.iter()
-                .filter(|(k, _)| match (start, end) {
-                    (Some(start), Some(end)) => k >= &&start && k < &&end,
-                    (Some(_), None) => {
-                        todo!("End position not provided! Either provide both or none!")
-                    }
-                    (None, Some(_)) => {
-                        todo!("Starts position not provided! Either provide both or none!")
-                    }
-                    (None, None) => true,
-                })
-                .map(|(k, v)| (*k, v))
-                .collect::<IndexMap<u32, &PileupCounter>>()
-        }) {
-            let start = start.unwrap_or(
-                *pileup_range
-                    .keys()
-                    .min()
-                    .expect("Could not get minimum position!"),
-            );
-            let end = end.unwrap_or(
-                *pileup_range
-                    .keys()
-                    .max()
-                    .expect("Could not get maximum position!"),
-            );
-
-            let mut obj = IndexMap::new();
-            obj.insert(chrom, &pileup_range);
-
-            let file = File::create(format!(
-                "{}.{}.{}.{}.pileup",
-                output_prefix, chrom, start, end
-            ))
-            .unwrap();
-
-            let mut wr = std::io::BufWriter::new(&file);
-            rmp_serde::encode::write(&mut wr, &pileup_range).unwrap();
+        for (pileup_chrom, infos) in self.pileup.iter() {
+            if chrom.is_some() && chrom.unwrap() != pileup_chrom {
+                continue;
+            }
+            obj.insert(pileup_chrom.to_owned(), infos);
         }
-    }
-
-    /// Save pileup for a range of positions in a bed file.
-    pub fn save_pileup_bed(
-        &self,
-        output_prefix: &str,
-        bed: &std::path::Path,
-    ) -> Result<(), UmiVarCalError> {
-        let mut reader = csv::ReaderBuilder::new()
-            .delimiter(b'\t')
-            .has_headers(false)
-            .comment(Some(b'#'))
-            .from_path(bed)
-            .expect("Could not read bed file!");
-
-        for record in reader.records() {
-            let record = record.expect("Could not read record!");
-            let bed_record: BedRecord = record
-                .deserialize(None)
-                .expect("Could not deserialize record!");
-            let chrom = bed_record.chrom;
-            let start = bed_record.start;
-            let end = bed_record.end;
-            self.save_pileup_range(output_prefix, &chrom, Some(start), Some(end));
+        match msgpack_save_with_names {
+            true => rmp_serde::encode::write_named(&mut wr, &obj)?,
+            false => rmp_serde::encode::write(&mut wr, &obj)?,
         }
         Ok(())
     }
@@ -420,7 +348,7 @@ impl Pileup {
         umi: &str,
         chromosome: &str,
         start: u32,
-        sequence: &[u8],
+        sequence: &Sequence,
         strand: u8,
         cursor_pos: u32,
         cursor_seq: usize,
@@ -429,7 +357,10 @@ impl Pileup {
         min_base_quality: u16,
     ) -> Result<(u32, usize, u32), UmiVarCalError> {
         for position in start + cursor_pos..start + cursor_pos + op_length {
-            let base = sequence[cursor_seq];
+            if cursor_seq >= sequence.len() {
+                break;
+            }
+            let base = sequence.get(cursor_seq).unwrap();
             let base_quality = base_qualities[cursor_seq] - 33;
             if base_quality as u16 >= min_base_quality {
                 //Access pileup[chromosome][position]
@@ -449,7 +380,7 @@ impl Pileup {
         umi: &str,
         chromosome: &str,
         position: u32,
-        sequence: &[u8],
+        sequence: &Sequence,
         strand: u8,
         cursor_pos: u32,
         cursor_seq: usize,
@@ -471,7 +402,7 @@ impl Pileup {
             let mut inserted_qscore = 0f32;
 
             for _ in 0..op_length {
-                let base = sequence[cursor_seq];
+                let base = sequence.get(cursor_seq).unwrap();
                 let base_quality = base_qualities[cursor_seq] - 33;
                 inserted_sequence.push(base);
                 inserted_qscore += base_quality as f32;
@@ -540,38 +471,23 @@ impl Pileup {
         strand: u8,
         chromosome: &str,
         start: u32,
-        cigar: &[u8],
-        sequence: &[u8],
+        cigar: &record::Cigar,
+        sequence: &Sequence,
         base_qualities: &[u8],
         min_base_quality: u16,
     ) -> Result<(), UmiVarCalError> {
-        let re = Regex::new(r"(\d+)([MSIDHN])").unwrap();
-        let mut operations = Vec::new();
-        for cap in re.captures_iter(str::from_utf8(cigar).unwrap_or("".into()).as_ref()) {
-            let length = cap[1].parse::<u32>().unwrap(); //Safe to unwrap because the regex guarantees that the capture is a number.
-            let operation = cap[2].chars().next().unwrap(); //Safe to unwrap because the regex guarantees that the capture is a single character.
-            operations.push(CIGAROperation { length, operation });
-        }
-        // Check if operations and sequence length match
-        if operations
-            .iter()
-            .map(|op| op.length as usize)
-            .sum::<usize>()
-            != sequence.len()
-        {
-            panic!("Invalid CIGAR string: CIGAR and sequence length do not match!");
-        }
-        //Remove N operations
-        operations.retain(|op| op.operation != 'N');
-
         let mut cursor_pos = 0;
         let mut cursor_seq = 0;
         let mut position = start;
         let mut start = start;
 
-        for (op_length, op_type) in operations.iter().map(|op| (op.length, op.operation)) {
+        for (op_type, op_length) in cigar
+            .iter()
+            .filter_map(|op| op.ok())
+            .map(|op| (op.kind(), op.len() as u32))
+        {
             match op_type {
-                'M' => {
+                cigar::op::Kind::Match => {
                     (position, cursor_seq, cursor_pos) = self.add_matches(
                         umi,
                         chromosome,
@@ -585,7 +501,7 @@ impl Pileup {
                         min_base_quality,
                     )?;
                 }
-                'I' => {
+                cigar::op::Kind::Insertion => {
                     (position, cursor_seq, cursor_pos) = self.add_insertions(
                         umi,
                         chromosome,
@@ -599,12 +515,12 @@ impl Pileup {
                         min_base_quality,
                     )?;
                 }
-                'D' => {
+                cigar::op::Kind::Deletion => {
                     (position, cursor_seq, cursor_pos) = self.add_deletions(
                         umi, chromosome, start, strand, cursor_pos, cursor_seq, op_length,
                     )?;
                 }
-                'S' => {
+                cigar::op::Kind::SoftClip => {
                     if cursor_pos == 0 {
                         start -= op_length;
                         cursor_pos += op_length;

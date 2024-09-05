@@ -29,6 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         cli_options.max_phase_distance(),
         cli_options.compute_coverage_stats(),
         cli_options.umi_source(),
+        cli_options.msgpack_with_names(),
     )?;
     Ok(())
 }

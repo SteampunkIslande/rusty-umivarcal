@@ -1,11 +1,6 @@
-use std::{
-    ops::Deref,
-    sync::{Arc, Mutex},
-};
-
 use indexmap::IndexMap;
 
-use noodles::{bam::record, sam::alignment::Record};
+use noodles::sam::alignment::Record;
 
 use crate::{
     commons::{read_is_valid, UmiSource},
@@ -55,7 +50,13 @@ pub fn treat_reads(
         let cigar = record.cigar();
         let sequence = record.sequence();
         let base_quals = record.quality_scores();
-        let flag = record.flags().bits();
+        let flag = record.flags();
+        if position.is_none() {
+            continue;
+        }
+        if chromosome.is_none() {
+            continue;
+        }
         let position = position.unwrap();
         let chromosome = chromosome.unwrap();
 
@@ -95,7 +96,6 @@ pub fn treat_reads(
                 String::from_utf8(umi).unwrap()
             }
         };
-        eprintln!("UMI: {}", umi);
 
         //umi_pos: last 4 digits of the position
         let umi_pos = if strand == 0 {
@@ -128,21 +128,19 @@ pub fn treat_reads(
             base_quals.as_ref(),
             min_read_quality,
         ) {
-            eprintln!("{}", record.name().unwrap());
+            valid_reads += 1;
             if let Ok(()) = pileup.add_read(
                 &umi,
                 strand,
                 &chromosome,
                 position as u32,
-                cigar.as_ref(),
-                sequence.as_ref(),
+                &cigar,
+                &sequence,
                 base_quals.as_ref(),
                 min_base_quality,
             ) {
-                valid_reads += 1;
+                //
             }
-        } else {
-            eprintln!("Read is not valid!");
         }
     }
 

@@ -43,6 +43,7 @@ pub fn call(
     max_phase_distance: u16,
     compute_coverage_stats: bool,
     umi_source: commons::UmiSource,
+    msgpack_with_names: bool,
 ) -> Result<(), UmiVarCalError> {
     let mut cores = cores;
 
@@ -100,19 +101,23 @@ pub fn call(
             min_mapping_quality,
             umi_source,
         )?;
-        eprintln!("{} valid reads found!", valid_reads);
+        eprintln!(
+            "{} valid reads found, out of {} reads total",
+            valid_reads, read_count
+        );
         add_depth_noise_ref_hp(&mut pileup, fasta)?;
         if keep_pileup {
             let pileup = &pileup;
             for chrom in pileup.pileup().keys() {
-                pileup.save_pileup_chromosome(
+                pileup.save_pileup(
                     output
                         .parent()
                         .unwrap_or(&env::current_dir().expect("Could not get current directory!"))
                         .join(sample_name)
                         .to_str()
                         .unwrap(),
-                    &chrom,
+                    None,
+                    msgpack_with_names,
                 );
             }
         }
