@@ -37,7 +37,7 @@ pub fn add_depth_noise_ref_hp(pileup: &mut Pileup, fasta: &Path) -> Result<(), U
     let mut reader = fasta::io::indexed_reader::Builder::default().build_from_path(fasta)?;
 
     let total_lines: usize = pileup
-        .pileup_mut()
+        .pileup()
         .iter()
         .map(|(_chromosome, infos)| infos.len())
         .sum();
