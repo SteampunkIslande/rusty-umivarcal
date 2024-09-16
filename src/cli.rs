@@ -120,9 +120,9 @@ pub struct Command {
     #[clap(long = "max_phase_distance", default_value = "100")]
     max_phase_distance: u16,
 
-    /// Whether to save messagepack objects with or without names. Please use for debugging purposes only (increases file size a lot).
-    #[clap(long = "msgpack-with-names")]
-    msgpack_with_names: bool,
+    /// Turn on debug mode. This will save messagepack objects with field names. This increases file size a lot.
+    #[clap(short = 'd', long = "debug")]
+    debug: bool,
 
     /// Where to get UMI barcodes from. Three optional mutually exclusive flags:
     /// 1. `--umi-from-read-name` to get UMI from the read name.
@@ -243,7 +243,7 @@ impl Command {
     }
 
     pub fn msgpack_with_names(&self) -> bool {
-        self.msgpack_with_names
+        self.debug
     }
 
     pub fn umi_source(&self) -> UmiSource {
