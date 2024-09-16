@@ -1,10 +1,12 @@
+use std::collections::HashMap;
+
 use indexmap::IndexMap;
 
 use noodles::sam::alignment::Record;
 
 use crate::{
     commons::{read_is_valid, UmiSource},
-    err::UmiVarCalError,
+    err::{PileupError, UmiVarCalError},
     pileup::Pileup,
 };
 use noodles::bam;
@@ -18,7 +20,7 @@ pub fn treat_reads(
     min_read_quality: u16,
     min_mapping_quality: u8,
     umi_source: UmiSource,
-) -> Result<usize, UmiVarCalError> {
+) -> Result<(usize, HashMap<String, i32>), UmiVarCalError> {
     let mut valid_reads = 0;
 
     let mut reader = bam::io::reader::Builder::default().build_from_path(bam_file)?;
@@ -27,6 +29,8 @@ pub fn treat_reads(
 
     //Create a set with all UMIs (contained in a Arc of Mutex)
     let mut all_umis: IndexMap<String, u32> = IndexMap::new();
+
+    let mut encountered_errors = HashMap::new();
 
     //Read bam_file in parallel, and update pileup
     for record in reader.records() {
@@ -121,6 +125,7 @@ pub fn treat_reads(
             .entry(umi.clone())
             .and_modify(|e| *e += 1)
             .or_insert(1);
+
         if read_is_valid(
             flag,
             mapq,
@@ -129,7 +134,7 @@ pub fn treat_reads(
             min_read_quality,
         ) {
             valid_reads += 1;
-            if let Ok(()) = pileup.add_read(
+            match pileup.add_read(
                 &umi,
                 strand,
                 &chromosome,
@@ -139,10 +144,31 @@ pub fn treat_reads(
                 base_quals.as_ref(),
                 min_base_quality,
             ) {
-                //
+                Ok(_) => {}
+                Err(e) => match e {
+                    UmiVarCalError::NoReferenceSequence => {
+                        encountered_errors
+                            .entry("No reference sequence found".to_string())
+                            .and_modify(|e| *e += 1)
+                            .or_insert(1);
+                    }
+                    UmiVarCalError::PileupError(PileupError::ChromosomeNotFound(c)) => {
+                        encountered_errors
+                            .entry(format!("Chromosome not found: {}", c))
+                            .and_modify(|e| *e += 1)
+                            .or_insert(1);
+                    }
+                    UmiVarCalError::PileupError(PileupError::PositionNotFound(_)) => {
+                        encountered_errors
+                            .entry(format!("Position not found"))
+                            .and_modify(|e| *e += 1)
+                            .or_insert(1);
+                    }
+                    _ => {}
+                },
             }
         }
     }
 
-    Ok(valid_reads)
+    Ok((valid_reads, encountered_errors))
 }

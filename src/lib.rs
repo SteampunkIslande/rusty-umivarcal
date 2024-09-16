@@ -91,7 +91,7 @@ pub fn call(
         .build_global()
         .unwrap();
     if rebuild {
-        valid_reads = treat_reads(
+        match treat_reads(
             &input,
             &mut pileup,
             read_count,
@@ -100,7 +100,15 @@ pub fn call(
             min_read_quality,
             min_mapping_quality,
             umi_source,
-        )?;
+        ) {
+            Ok((valid, encountered_errors)) => {
+                valid_reads = valid;
+                for (error, count) in encountered_errors {
+                    eprintln!("{}: {}", error, count);
+                }
+            }
+            Err(e) => return Err(e),
+        }
         eprintln!(
             "{} valid reads found, out of {} reads total",
             valid_reads, read_count
