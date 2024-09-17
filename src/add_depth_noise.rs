@@ -42,11 +42,13 @@ pub fn add_depth_noise_ref_hp(pileup: &mut Pileup, fasta: &Path) -> Result<(), U
         .map(|(_chromosome, infos)| infos.len())
         .sum();
 
+    let mut current_line = 0;
+
     for (chromosome, infos) in pileup.pileup_mut().iter_mut() {
         for (position, composition) in infos.iter_mut() {
             // Add reference base to pileup composition
             let reference_base =
-                get_ref_from_fasta_region(&mut reader, chromosome, (*position as usize) - 1, None)?
+                get_ref_from_fasta_region(&mut reader, chromosome, *position as usize, None)?
                     .to_uppercase();
             composition.set_reference(&reference_base.bytes().next().unwrap());
 
@@ -56,7 +58,7 @@ pub fn add_depth_noise_ref_hp(pileup: &mut Pileup, fasta: &Path) -> Result<(), U
                 &mut reader,
                 chromosome,
                 (*position as usize) - 20,
-                Some(40),
+                Some(41),
             )?;
             hp += seq_around_pos
                 .chars()
@@ -66,7 +68,7 @@ pub fn add_depth_noise_ref_hp(pileup: &mut Pileup, fasta: &Path) -> Result<(), U
                 .count();
             hp += seq_around_pos
                 .chars()
-                .skip(20)
+                .skip(21)
                 .take_while(|&c| c == reference_base.chars().next().unwrap())
                 .count();
             composition.set_homopolymer(hp as u16);
@@ -76,6 +78,9 @@ pub fn add_depth_noise_ref_hp(pileup: &mut Pileup, fasta: &Path) -> Result<(), U
             composition.compute_mean_qscore();
 
             composition.compute_mean_base_qscore();
+
+            current_line += 1;
+            eprint!("\rComputing noise...{}%", current_line * 100 / total_lines);
         }
     }
 

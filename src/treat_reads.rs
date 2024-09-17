@@ -15,7 +15,6 @@ pub fn treat_reads(
     bam_file: &std::path::Path,
     pileup: &mut Pileup,
     n_reads: usize,
-    output: &std::path::Path,
     min_base_quality: u16,
     min_read_quality: u16,
     min_mapping_quality: u8,
@@ -32,12 +31,23 @@ pub fn treat_reads(
 
     let mut encountered_errors = HashMap::new();
 
+    let mut processed_reads = 0;
+
+    eprintln!("Processing reads...");
     //Read bam_file in parallel, and update pileup
     for record in reader.records() {
+        processed_reads += 1;
+        eprint!(
+            "Processing read: {}/{}({}%)\r",
+            processed_reads,
+            n_reads,
+            processed_reads * 100 / n_reads
+        );
+
         let record = record.expect("Could not read record!");
 
+        //Original UMI VarCal was checking character -7 of the binary representation of the flags.
         let strand = record.flags().is_reverse_complemented() as u8;
-        let first_in_pair = record.flags().is_first_segment();
         let chromosome: Option<String> = record
             .reference_sequence(&header)
             .transpose()
@@ -170,5 +180,6 @@ pub fn treat_reads(
         }
     }
 
+    eprintln!("");
     Ok((valid_reads, encountered_errors))
 }

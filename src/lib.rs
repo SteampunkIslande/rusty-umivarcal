@@ -1,6 +1,5 @@
 use err::UmiVarCalError;
 use noodles::{bam, fasta};
-use std::env;
 use std::fs::File;
 use std::io::BufReader;
 pub mod err;
@@ -86,16 +85,11 @@ pub fn call(
             cores = 1;
         }
     }
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(cores)
-        .build_global()
-        .unwrap();
     if rebuild {
         match treat_reads(
             &input,
             &mut pileup,
             read_count,
-            &output,
             min_base_quality,
             min_read_quality,
             min_mapping_quality,
@@ -118,12 +112,7 @@ pub fn call(
             let pileup = &pileup;
             for chrom in pileup.pileup().keys() {
                 pileup.save_pileup(
-                    output
-                        .parent()
-                        .unwrap_or(&env::current_dir().expect("Could not get current directory!"))
-                        .join(sample_name)
-                        .to_str()
-                        .unwrap(),
+                    output.join(sample_name).to_str().unwrap(),
                     None,
                     msgpack_with_names,
                 );

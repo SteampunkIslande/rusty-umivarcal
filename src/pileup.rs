@@ -34,7 +34,7 @@ pub struct NucleotideCounter {
 #[derive(Debug, Default, serde::Deserialize, serde::Serialize)]
 pub struct PileupCounter {
     // Reference base at this position
-    reference: u8,
+    reference: char,
 
     //Keep track of the number of each nucleotide at this position (plus strand), the set of UMIs, and the sum of the quality scores.
     a: NucleotideCounter,
@@ -105,7 +105,7 @@ impl PileupCounter {
     }
 
     pub fn set_reference(&mut self, nuc: &u8) {
-        self.reference = *nuc;
+        self.reference = *(nuc) as char;
     }
 
     pub fn set_homopolymer(&mut self, hp: u16) {
@@ -311,7 +311,9 @@ impl Pileup {
             }
         }
 
-        Self { pileup }
+        let mut result = Self { pileup };
+        result.sort();
+        result
     }
 
     /// Load pileup from serialized messagepack file.
